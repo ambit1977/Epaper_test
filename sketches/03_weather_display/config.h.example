@@ -1,0 +1,8 @@
+/*
+ * Copy this file to config.h and edit the values for your environment.
+ * config.h is gitignored to keep your credentials out of the repo.
+ */
+#pragma once
+
+const char* WIFI_SSID     = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";

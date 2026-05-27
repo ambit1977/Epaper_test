@@ -1,0 +1,22 @@
+# Sensitive credentials
+sketches/03_weather_display/config.h
+
+# Arduino build artifacts
+build/
+*.tmp.cpp
+*.hex
+*.bin
+*.elf
+*.map
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Local Claude session metadata
+.claude/
