@@ -1,5 +1,6 @@
 # Sensitive credentials
 sketches/03_weather_display/config.h
+sketches/04_weather_display_dual/config.h
 
 # Arduino build artifacts
 build/

@@ -13,11 +13,17 @@ ESP32 と WeAct Studio 2.9" BWR E-Paper モジュールを使った、Wi-Fi 経�
 - 3 日間予報（今日 / 明日 / 明後日）
 - NTP 同期で更新時刻表示（API 時刻フォールバックあり）
 - Deep Sleep による省電力（10 分間隔更新）
+- **2.9" / 4.2" 自動判別**（`04_weather_display_dual`）
+  - 4.2" 接続時は 6 日間予報 + 24h 気温グラフのリッチレイアウト
+  - 2.9" 接続時は 3 日間予報のコンパクトレイアウト
 
 ## ハードウェア
 
 - ESP32 DevKit V1（ESP32-WROOM-32）
 - WeAct Studio 2.9" BWR E-Paper Module（128×296、SSD1680 コントローラ）
+- WeAct Studio 4.2" BWR E-Paper Module（400×300、SSD1683 コントローラ）— 任意
+
+両モジュールとも同じ JST 8-pin ピン配置で、配線を変えずに差し替え可能。
 
 ### ⚠️ 重要：このモジュール固有の落とし穴
 
@@ -90,13 +96,22 @@ const char* CITY = "Tokyo";    // 表示名
 ### 4. コンパイル & アップロード
 
 ```bash
+# 2.9インチ専用
 arduino-cli compile --upload \
   -p /dev/cu.usbserial-XXX \
   --fqbn esp32:esp32:esp32:UploadSpeed=115200 \
   sketches/03_weather_display
+
+# 2.9 / 4.2 自動判別版（パーティション拡張が必要）
+arduino-cli compile --upload \
+  -p /dev/cu.usbserial-XXX \
+  --fqbn esp32:esp32:esp32:UploadSpeed=115200,PartitionScheme=huge_app \
+  sketches/04_weather_display_dual
 ```
 
-> **注意**: `UploadSpeed=115200` の指定が必須。デフォルト 921600 だと USB ケーブル品質によって `Chip stopped responding` エラーが頻発する。
+> **注意**:
+> - `UploadSpeed=115200` の指定が必須。デフォルト 921600 だと USB ケーブル品質によって `Chip stopped responding` エラーが頻発する。
+> - dual 版は両方のドライバ + 日本語フォントが入るため `PartitionScheme=huge_app`（アプリ領域 3MB）が必須。
 
 ## ディレクトリ構成
 
@@ -108,10 +123,14 @@ arduino-cli compile --upload \
 ├── sketches/
 │   ├── 01_basic_test/          自前ドライバの初期テスト（参考）
 │   ├── 02_hello_world/         GxEPD2 で Hello World 表示（最小サンプル）
-│   ├── 03_weather_display/     ★ 天気予報メイン
+│   ├── 03_weather_display/     2.9" 専用の天気予報
 │   │   ├── weather_display.ino
 │   │   ├── config.h.example
 │   │   └── (config.h)          各自で作成、gitignored
+│   ├── 04_weather_display_dual/  ★ 2.9" / 4.2" 自動判別版
+│   │   ├── weather_display_dual.ino
+│   │   ├── config.h.example
+│   │   └── (config.h)          gitignored
 │   └── diagnostic/             診断ツール（配線疑い時に使う）
 │       ├── loopback_test.ino   GPIO ループバック確認
 │       ├── signal_check.ino    信号 HIGH/LOW 制御（マルチメーター用）
