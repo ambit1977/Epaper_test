@@ -275,6 +275,117 @@ PN532 の通電時間は実質 **5 秒程度**。
 
 ---
 
+## 7b. 場所推定（多段フォールバック）
+
+vCard NOTE に書き込む「場所」をどう確定するか。
+部品追加ゼロで実用精度を出すために **4 段階フォールバック** を採用：
+
+```
+[書き換えトリガーボタン押下]
+       │
+       ▼
+Tier 0: NFC 場所マーカー（PN532 で読み取り、オプション）
+       │ ヒット → 確定
+       ▼
+Tier 1: WiFi SSID マッピング（即決、最速）
+       │ 既知 → 確定
+       ▼
+Tier 2: IP Geolocation (ip-api.com)
+       │ 成功 → 市区町村レベルで確定
+       ▼
+Tier 3: 前回値保持 or "外出先"
+```
+
+### Tier 0: NFC 場所マーカー（究極案、オプション）
+
+各場所に **NTAG213 ステッカー**（50円/枚）を貼っておく：
+- 自宅の玄関、オフィスの机、よく行くカフェのテーブル下、など
+- NDEF テキストレコードに `"渋谷オフィス"` 等を書き込み
+- 名刺デバイスを **机に置く** → PN532 で読み取り → 場所確定
+
+「机に置いてからボタン押下」が自然な操作になる。
+部品は NFC ステッカーのみ、ハード追加ゼロ（既に PN532 を載せている）。
+
+### Tier 1: WiFi SSID + BSSID マッピング
+
+```cpp
+struct KnownLocation {
+  const char* ssid;
+  const char* bssid;        // 任意、同名 SSID 区別用
+  const char* display_name;
+};
+
+const KnownLocation LOCATIONS[] = {
+  {"NOANOA",        nullptr,             "自宅"},
+  {"ezmag-office",  nullptr,             "渋谷オフィス"},
+  {"FREESPOT",      "AA:BB:CC:11:22:33", "新宿カフェ"},
+  {"FREESPOT",      "DD:EE:FF:44:55:66", "六本木カフェ"},
+};
+```
+
+同名 SSID（FREESPOT, Starbucks_Wi2, など）の区別には BSSID を併用。
+
+### Tier 2: IP Geolocation (ip-api.com)
+
+```cpp
+String fetchLocationFromIP() {
+  HTTPClient http;
+  http.begin("http://ip-api.com/json?lang=ja&fields=city,regionName,status");
+  if (http.GET() != 200) { http.end(); return ""; }
+
+  JsonDocument doc;
+  deserializeJson(doc, http.getString());
+  http.end();
+
+  if (doc["status"] != "success") return "";
+  String city   = doc["city"].as<String>();
+  String region = doc["regionName"].as<String>();
+  return city.isEmpty() ? region : (city + "/" + region);
+}
+```
+
+- 無料、API キー不要
+- `lang=ja` で日本語の地名（渋谷区、新宿区、など）
+- 45 req/min、月間 unlimited
+- ⚠️ HTTP のみ（HTTPS は有料、位置情報は機密度低いので HTTP で許容）
+- ⚠️ モバイル回線・VPN だと精度落ちる
+
+### Tier 3: フォールバック
+
+```cpp
+String location = location_cache.isEmpty() ? "外出先" : location_cache;
+```
+
+最後の手段。前回成功した値を RTC RAM に保持しておく。
+
+### 各手法の比較
+
+| 手法 | 精度 | 追加部品 | 電力 | コスト | 採用 |
+|------|-----|---------|------|-------|------|
+| **NFC 場所マーカー** | ◎ 設置場所で完璧 | NTAG ステッカー | ◎ | 50円/個 | Tier 0 |
+| **WiFi SSID マッピング** | ◎ 既知の場所 | 不要 | ◎ | 無料 | Tier 1 |
+| **WiFi SSID + BSSID** | ◎ 同名SSIDも区別可 | 不要 | ◎ | 無料 | Tier 1 |
+| **IP Geolocation (ip-api)** | △ 市区町村 | 不要 | ◎ | 無料 | Tier 2 |
+| **WiFi スキャン + Google Geolocation** | ◯ 数十m | 不要 | ◯ | $1〜/月 | 採用外 |
+| **GPS モジュール** | ◎ 数m | GPS 必要 | ✗ 大 | 1,500円〜 | 採用外（屋内不可、電力大） |
+| **BLE ビーコン** | ◯ 半径5m | ビーコン設置 | △ | 1個1,000円 | 将来検討 |
+| **スマホ連携 (BLE)** | ◎ | スマホアプリ | △ | 開発工数大 | 将来検討 |
+| **時刻ベース推定** | △ パターン頼み | 不要 | ◎ | 無料 | 補助のみ |
+
+### 実装の優先順位
+
+| Phase | 内容 | 工数 |
+|-------|------|------|
+| Phase 1 | WiFi SSID マッピング（config.h に登録）| 1 時間 |
+| Phase 2 | ip-api.com フォールバック | 1 時間 |
+| Phase 3（任意） | NFC 場所マーカー | 半日 |
+| Phase 4（任意） | BSSID 併用判定 | 半日 |
+| Phase 5（将来） | BLE ビーコン or スマホ連携 | 大工事 |
+
+最初は **Phase 1 + Phase 2** で十分実用的。NFC マーカーは慣れてきてから追加。
+
+---
+
 ## 8. 部品リスト
 
 ### NFC 関連（追加分）
@@ -286,8 +397,9 @@ PN532 の通電時間は実質 **5 秒程度**。
 | **P-MOSFET（電源スイッチ用）** | `AO3401 SOT-23` または `IRLML6402` | ✓ | 500-800円 / 10個 |
 | **NFC 用フェライトシート** | `NFC アンチメタル シート` | ✓ | 500-800円 |
 | **抵抗 10kΩ**（P-MOSFET プルアップ用） | (キットに含む想定) | - | - |
+| **NTAG213 ステッカー**（場所マーカー用、Tier 0、任意） | `NTAG213 NFC ステッカー` | ✓ | 500-800円 / 10枚 |
 
-### 合計 NFC 関連: 約 3,000-4,500円
+### 合計 NFC 関連: 約 3,000-4,500円（場所マーカー除く）
 
 ---
 
