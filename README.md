@@ -127,8 +127,12 @@ arduino-cli compile --upload \
 │   │   ├── weather_display.ino
 │   │   ├── config.h.example
 │   │   └── (config.h)          各自で作成、gitignored
-│   ├── 04_weather_display_dual/  ★ 2.9" / 4.2" 自動判別版
+│   ├── 04_weather_display_dual/  2.9" / 4.2" 自動判別版
 │   │   ├── weather_display_dual.ino
+│   │   ├── config.h.example
+│   │   └── (config.h)          gitignored
+│   ├── 05_weather_display_lp/  ★ 低消費電力版（静的IP、NTP1日1回、BT無効）
+│   │   ├── weather_display_lp.ino
 │   │   ├── config.h.example
 │   │   └── (config.h)          gitignored
 │   └── diagnostic/             診断ツール（配線疑い時に使う）

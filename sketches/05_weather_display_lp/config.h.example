@@ -1,0 +1,17 @@
+/*
+ * Copy this file to config.h and edit the values for your environment.
+ * config.h is gitignored to keep your credentials out of the repo.
+ */
+#pragma once
+
+const char* WIFI_SSID     = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+
+// Optional: static IP for fast WiFi (skip DHCP)
+// Set STATIC_IP_OCTET_A to 0 to use DHCP.
+#define STATIC_IP_OCTET_A 192
+#define STATIC_IP_OCTET_B 168
+#define STATIC_IP_OCTET_C 1
+#define STATIC_IP_OCTET_D 50
+#define GATEWAY_IP_D      1
+#define DNS_IP_D          1
