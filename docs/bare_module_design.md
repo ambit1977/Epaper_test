@@ -149,6 +149,21 @@ ESP32 への電源は MCP1700 (リポ駆動) からのみ。FTDI の VCC は接�
 - GPIO0, GPIO2, GPIO12, GPIO15 は起動時の状態でブートモードが決まる
 - 現状の E-Paper 配線は GPIO0/2/12/15 を使っていないので問題なし
 
+### NFC（NTAG I²C plus 2k）の追加（スマートビジネスカード用途）
+
+[smart_business_card_design.md](smart_business_card_design.md) 参照。
+ESP32 から I2C で NDEF を書き込む構成：
+
+| 信号 | ESP32 GPIO | NTAG I²C plus |
+|------|-----------|---------------|
+| VCC | 3.3V | VCC |
+| GND | GND | GND |
+| SDA | GPIO21 | SDA |
+| SCL | GPIO22 | SCL |
+| FD（割込） | GPIO13 | FD (Field Detect) |
+
+GPIO21/22 は ESP32 のハードウェア I2C デフォルトピン。E-Paper の SPI とは独立。
+
 ---
 
 ## 5. 自動リセット回路（書き込みを楽にする）

@@ -17,6 +17,18 @@ ESP32 と WeAct Studio 2.9" BWR E-Paper モジュールを使った、Wi-Fi 経�
   - 4.2" 接続時は 6 日間予報 + 24h 気温グラフのリッチレイアウト
   - 2.9" 接続時は 3 日間予報のコンパクトレイアウト
 
+## 関連ドキュメント
+
+| ドキュメント | 内容 |
+|------------|------|
+| [docs/pin_mapping.md](docs/pin_mapping.md) | 配線図と JST 色不一致の警告 |
+| [docs/panel_detection.md](docs/panel_detection.md) | 2.9"/4.2" 自動判別の仕組み |
+| [docs/u8g2_japanese_notes.md](docs/u8g2_japanese_notes.md) | 日本語フォント注意点 |
+| [docs/low_power_optimization.md](docs/low_power_optimization.md) | 低消費電力対策（3 Phase）|
+| [docs/bare_module_design.md](docs/bare_module_design.md) | ESP32-WROOM-32 ベアモジュール基板設計 |
+| [docs/case_design_spec.md](docs/case_design_spec.md) | 3D プリントケース仕様 |
+| [docs/smart_business_card_design.md](docs/smart_business_card_design.md) | スマートビジネスカード化（NFC 追加）|
+
 ## ハードウェア
 
 - ESP32 DevKit V1（ESP32-WROOM-32）
