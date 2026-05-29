@@ -28,6 +28,7 @@ ESP32 と WeAct Studio 2.9" BWR E-Paper モジュールを使った、Wi-Fi 経�
 | [docs/bare_module_design.md](docs/bare_module_design.md) | ESP32-WROOM-32 ベアモジュール基板設計 |
 | [docs/case_design_spec.md](docs/case_design_spec.md) | 3D プリントケース仕様 |
 | [docs/smart_business_card_design.md](docs/smart_business_card_design.md) | スマートビジネスカード化（NFC 追加）|
+| [docs/business_card_site_design.md](docs/business_card_site_design.md) | 名刺サイト設計（Cloudflare Workers、ESP32 連携 API）|
 
 ## ハードウェア
 

@@ -275,26 +275,105 @@ PN532 の通電時間は実質 **5 秒程度**。
 
 ---
 
-## 7b. 場所推定（多段フォールバック）
+## 7b. 場所・イベント情報の取得（名刺サイト連携）
 
-vCard NOTE に書き込む「場所」をどう確定するか。
-部品追加ゼロで実用精度を出すために **4 段階フォールバック** を採用：
+vCard NOTE に書き込む「場所 / イベント / トピック」は、機械的な推測ではなく
+**本人がスマホから明示的に設定する**方式を採用。
+
+### 設計の根拠
+
+| 検討した手法 | 不採用の理由 |
+|------------|------------|
+| NFC 場所マーカー（各場所に貼る） | 運用が現実的でない |
+| WiFi SSID マッピング | カバー範囲が狭く保守も面倒 |
+| IP Geolocation (ip-api) | 精度が市区町村レベルで「ぼやけた」情報になる |
+| GPS モジュール | 屋内不可 + 消費電力大 |
+
+→ **本人発信型 (Self-publish)** に振り切る。
+
+### アーキテクチャ
 
 ```
-[書き換えトリガーボタン押下]
-       │
-       ▼
-Tier 0: NFC 場所マーカー（PN532 で読み取り、オプション）
-       │ ヒット → 確定
-       ▼
-Tier 1: WiFi SSID マッピング（即決、最速）
-       │ 既知 → 確定
-       ▼
-Tier 2: IP Geolocation (ip-api.com)
-       │ 成功 → 市区町村レベルで確定
-       ▼
-Tier 3: 前回値保持 or "外出先"
+[秋山のスマホ]
+     │ Web UI で「今ここ / 今これ」を入力
+     ▼
+[名刺サイト akiyama.<domain>]
+  ├ /admin   ... 設定画面（認証）
+  ├ /api/now ... ESP32 等が取得する JSON
+  └ /now     ... 公開ステータスページ
+     │
+     │ GET /api/now (10分ごと or ボタン押下)
+     ▼
+[ESP32 名刺デバイス]
+     │ JSON から place/event/topic を取り出して NDEF 化
+     ▼
+[NTAG215 書き換え]
+     │
+     │ NFC タッチ
+     ▼
+[相手のスマホ]
+   vCard NOTE: "2026-05-28 14:23 / 渋谷 / IoT Conf 2026 - Edge AI の話 #3"
 ```
+
+### 名刺サイトに含まれる情報
+
+```json
+{
+  "current": {
+    "place": "渋谷",
+    "venue": "WeWork 渋谷スクランブルスクエア",
+    "event": "IoT Conference 2026",
+    "topic": "Edge AI × E-Paper の話",
+    "public": true
+  }
+}
+```
+
+詳細仕様は [business_card_site_design.md](business_card_site_design.md) を参照。
+
+### ESP32 側の実装
+
+```cpp
+struct CurrentContext {
+  String place, event, topic, venue;
+};
+
+bool fetchCurrentContext(CurrentContext& ctx) {
+  HTTPClient http;
+  http.begin("https://akiyama.example.com/api/now");
+  if (http.GET() != 200) { http.end(); return false; }
+  JsonDocument doc;
+  deserializeJson(doc, http.getString());
+  http.end();
+  ctx.place = doc["current"]["place"].as<String>();
+  ctx.event = doc["current"]["event"].as<String>();
+  ctx.topic = doc["current"]["topic"].as<String>();
+  ctx.venue = doc["current"]["venue"].as<String>();
+  return true;
+}
+```
+
+### フォールバック
+
+取得失敗時は **RTC RAM の前回値を使う**：
+
+```cpp
+if (!fetchCurrentContext(ctx)) {
+  ctx = loadCachedContextFromRtcRam();  // 前回値
+}
+```
+
+これだけ。シンプル。
+
+### メリットの整理
+
+| 観点 | 効果 |
+|------|------|
+| 精度 | 100%（本人が入力したものそのまま） |
+| 表現力 | 場所だけでなく venue / event / topic も載せられる |
+| 副産物 | `/now` 公開ページが SNS プロフィール用に使える |
+| ESP32 ロジック | 単純化：API GET → NDEF 化 |
+| コスト | Cloudflare 無料枠 + ドメイン年 1000円 |
 
 ### Tier 0: NFC 場所マーカー（究極案、オプション）
 
@@ -397,9 +476,9 @@ String location = location_cache.isEmpty() ? "外出先" : location_cache;
 | **P-MOSFET（電源スイッチ用）** | `AO3401 SOT-23` または `IRLML6402` | ✓ | 500-800円 / 10個 |
 | **NFC 用フェライトシート** | `NFC アンチメタル シート` | ✓ | 500-800円 |
 | **抵抗 10kΩ**（P-MOSFET プルアップ用） | (キットに含む想定) | - | - |
-| **NTAG213 ステッカー**（場所マーカー用、Tier 0、任意） | `NTAG213 NFC ステッカー` | ✓ | 500-800円 / 10枚 |
+### 合計 NFC 関連: 約 3,000-4,500円
 
-### 合計 NFC 関連: 約 3,000-4,500円（場所マーカー除く）
+> 場所判定はクラウド経由（名刺サイト）で行うので、NTAG213 場所マーカーは不要。
 
 ---
 
