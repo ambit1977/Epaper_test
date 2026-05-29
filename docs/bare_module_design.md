@@ -149,20 +149,47 @@ ESP32 への電源は MCP1700 (リポ駆動) からのみ。FTDI の VCC は接�
 - GPIO0, GPIO2, GPIO12, GPIO15 は起動時の状態でブートモードが決まる
 - 現状の E-Paper 配線は GPIO0/2/12/15 を使っていないので問題なし
 
-### NFC は基板上に載せない（既存 NFC 名刺サイト統合のため）
+### NFC（PN532 + 内蔵 NTAG215）の追加
 
-[smart_business_card_design.md](smart_business_card_design.md) を参照。
+[smart_business_card_design.md](smart_business_card_design.md) 参照。
 
-電子ペーパー名刺デバイスは **NFC 機能を持たない**。NFC タグは別途用意した
-NTAG213/215 ステッカーに iPhone NFC Tools で **固定 URL を 1回だけ書き込む**
-（[既存運用](https://github.com/ambit1977/smart_business_card/blob/main/NFC_WRITE_iPhone.md) 通り）。
-動的な状況発信はサーバの `now.json` 経由で行う。
+ELECHOUSE PN532 NFC Module V3 を I2C で接続。SET0=H、SET1=L にディップスイッチを
+設定して I2C モードに切り替える。
 
-これにより PN532 / フェライトシート / P-MOSFET 等は不要、配線も簡素化される。
+#### PN532 配線（I2C モード）
 
-### オプション: 強制更新ボタン
+| 信号 | ESP32 GPIO | PN532 ピン | 備考 |
+|------|-----------|-----------|------|
+| VDD | 3.3V（or 5V）| VDD | モジュールは内部レギュレータで両対応 |
+| GND | GND | GND | |
+| SDA | GPIO21 | SDA | I2C デフォルト |
+| SCL | GPIO22 | SCL | I2C デフォルト |
+| IRQ | GPIO13 | INT0 | カード検出割込み |
+| RST | GPIO14 | RSTPDN | 電源 / リセット制御 |
 
-ボタン押下で Deep Sleep から ext0 wake し、即時に天気と `now.json` を再取得する：
+GPIO21/22 は ESP32 のハードウェア I2C デフォルトピン。E-Paper の SPI とは独立。
+
+#### 省電力制御（RST ピン）
+
+通常時は PN532 を OFF にする：
+```cpp
+digitalWrite(PN532_RST, LOW);   // OFF（消費 < 1mA）
+// 必要時のみ:
+digitalWrite(PN532_RST, HIGH);  // ON
+delay(50);
+nfc.begin(); nfc.SAMConfig();
+```
+
+完全に切るなら GPIO27 から P-MOSFET（AO3401）で VDD を切断する選択肢もある。
+
+#### NTAG215（パッシブタグ、デバイス内蔵）
+
+PN532 のアンテナの近接（< 1cm）に NTAG215 ステッカーを配置。
+ESP32 からは直接配線しない（PN532 のアンテナで読み書きする）。
+
+### オプション: 強制更新 / 名刺交換ボタン
+
+ボタン押下で Deep Sleep から ext0 wake し、PN532 起動 → NTAG 書き換え + 相手 NFC 読み取り：
 
 | 信号 | ESP32 GPIO | 接続 |
 |------|-----------|------|
