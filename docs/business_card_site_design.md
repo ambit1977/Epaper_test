@@ -572,6 +572,221 @@ JSON Lines を読んで集計表示。秋山スマホで「今日 N 人と交換
 +──────────────────────────────────────────────+
 ```
 
+## 11c. 訪問者コンテキストの拡張取得
+
+NFC で物理的に取れない情報を、Web 訪問ログから補完する。
+`context.php` を POST 対応にして、JS から追加情報をサーバへ送る。
+
+### サーバ側（context.php 拡張）
+
+```php
+$token = $_GET['t'] ?? null;
+if (!$token || !preg_match('/^[0-9a-f]{16}$/', $token)) {
+    http_response_code(400);
+    exit;
+}
+
+$entry = lookupToken($token);
+if (!$entry) {
+    http_response_code(404);
+    exit;
+}
+
+// POST なら追加情報を受信
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $body = json_decode(file_get_contents('php://input') ?: '', true) ?: [];
+    appendEvent($token, [
+        'type'       => 'opened',
+        'opened_at'  => date('c'),
+        'ip'         => $_SERVER['REMOTE_ADDR'] ?? '',
+        'country'    => geoLookup($_SERVER['REMOTE_ADDR'] ?? '')['country'] ?? null,
+        'city'       => geoLookup($_SERVER['REMOTE_ADDR'] ?? '')['city'] ?? null,
+        'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
+        'device'     => parseUserAgent($_SERVER['HTTP_USER_AGENT'] ?? ''),
+        'screen'     => $body['screen']    ?? null,
+        'timezone'   => $body['timezone']  ?? null,
+        'language'   => $body['language']  ?? null,
+        'referrer'   => $body['referrer']  ?? null,
+    ]);
+}
+
+// 発行時のコンテキストを返す
+echo json_encode([
+    'token'           => $token,
+    'issued_at'       => $entry['issued_at'],
+    'issued_location' => $entry['issued_location'],
+    'issued_event'    => $entry['issued_event'],
+    'issued_topic'    => $entry['issued_topic'],
+]);
+```
+
+### クライアント側（pages/index.jsx 拡張）
+
+```js
+useEffect(() => {
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get('t');
+  if (!token) return;
+
+  const ext = {
+    screen: `${screen.width}x${screen.height}@${devicePixelRatio}`,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    language: navigator.language,
+    referrer: document.referrer || null,
+  };
+
+  fetch(`./api/context.php?t=${token}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(ext),
+  })
+    .then((r) => r.ok ? r.json() : null)
+    .then((ctx) => { if (ctx) setExchangeContext(ctx); });
+}, []);
+```
+
+### 取れる情報のまとめ
+
+| 情報源 | 取れる項目 |
+|--------|----------|
+| HTTP ヘッダ | IP（→ 国・市推定）、User-Agent（→ OS / 機種 / ブラウザ） |
+| Referrer | 直前のページ（SNS シェア経由かなど） |
+| JS（送信時） | 画面解像度、DPR、タイムゾーン、言語、リファラ |
+| Cookie / LocalStorage | （任意で）リピータ判定 |
+
+これで「**いつ・どんな端末・どこから・どんな環境で**」開いてもらえたかが
+かなり正確に分かる。NFC 物理スキャンで取れる情報（UID だけ、しかも
+ランダム化されている）より遥かに有用。
+
+---
+
+## 11d. 相手からの vCard 受信（双方向交換）
+
+「あなたの連絡先も送る」ボタンで、相手が任意の vCard をアップロード。
+**相手が意識的に同意した時のみ**取得するので、プライバシー的・法的にも完全クリーン。
+
+### サーバ側（upload-vcard.php）
+
+```php
+<?php
+declare(strict_types=1);
+header('Content-Type: application/json; charset=utf-8');
+
+$token = $_GET['t'] ?? '';
+if (!preg_match('/^[0-9a-f]{16}$/', $token)) {
+    http_response_code(400);
+    echo json_encode(['error' => 'invalid token']);
+    exit;
+}
+
+$entry = lookupToken($token);
+if (!$entry) {
+    http_response_code(404);
+    echo json_encode(['error' => 'unknown token']);
+    exit;
+}
+
+// 既にアップロード済みなら拒否
+if (hasVCard($token)) {
+    http_response_code(409);
+    echo json_encode(['error' => 'already received']);
+    exit;
+}
+
+// $_FILES['vcard'] を検証
+if (empty($_FILES['vcard']) || $_FILES['vcard']['error'] !== UPLOAD_ERR_OK) {
+    http_response_code(400);
+    echo json_encode(['error' => 'no file']);
+    exit;
+}
+
+if ($_FILES['vcard']['size'] > 10 * 1024) {       // 10 KB 上限
+    http_response_code(413);
+    echo json_encode(['error' => 'too large']);
+    exit;
+}
+
+$content = file_get_contents($_FILES['vcard']['tmp_name']);
+
+// 簡易サニタイズ: BEGIN:VCARD で始まり END:VCARD で終わる
+if (!preg_match('/^BEGIN:VCARD/i', $content)
+    || !preg_match('/END:VCARD\s*$/i', $content)) {
+    http_response_code(400);
+    echo json_encode(['error' => 'not a vcard']);
+    exit;
+}
+
+// ファイル名はトークンをハッシュ化（パストラバーサル防止）
+$safeName = hash('sha256', $token) . '.vcf';
+$dest = '/var/www/ambit.go2020.tokyo-card/_data/vcards/' . $safeName;
+@mkdir(dirname($dest), 0775, true);
+file_put_contents($dest, $content);
+
+appendEvent($token, [
+    'type'         => 'vcard',
+    'received_at'  => date('c'),
+    'file'         => '_data/vcards/' . $safeName,
+    'filesize'     => $_FILES['vcard']['size'],
+]);
+
+echo json_encode(['ok' => true]);
+```
+
+### クライアント側 UI
+
+```jsx
+const [exchanged, setExchanged] = useState(false);
+const fileRef = useRef();
+
+const onVcardUpload = async (e) => {
+  const file = e.target.files[0];
+  if (!file || !token) return;
+  const form = new FormData();
+  form.append('vcard', file);
+  const res = await fetch(`./api/upload-vcard.php?t=${token}`, {
+    method: 'POST',
+    body: form,
+  });
+  if (res.ok) setExchanged(true);
+};
+
+return (
+  <>
+    <button onClick={() => fileRef.current.click()}>
+      📤 私の vCard も送る
+    </button>
+    <input
+      ref={fileRef}
+      type="file"
+      accept=".vcf,text/vcard,text/x-vcard"
+      onChange={onVcardUpload}
+      hidden
+    />
+    {exchanged && <p>ありがとう、交換完了 ✓</p>}
+  </>
+);
+```
+
+### 制約
+
+- 1 token につき vCard アップロードは 1 回まで
+- ファイルサイズ 10 KB 上限
+- MIME と内容を両方チェック
+- 受信した vCard は **秋山だけが /admin/log で確認可能**
+- 保存パスにファイル名が漏れないよう、URL 経由ではアクセス不可
+  （Apache で `_data/` ディレクトリを `Require all denied` で塞ぐ）
+
+### 連絡先共有のスマホ動作
+
+| OS | 操作 |
+|----|------|
+| iOS | 連絡先アプリで自分の連絡先 → 連絡先を共有 → ファイル保存 → Safari に戻ってアップロード |
+| Android | 連絡先アプリで送信 → ファイル化 → Chrome のアップロードに渡す |
+
+Web Share Target API 対応の PWA にすれば、もう少しスマートにできる将来余地あり。
+
+---
+
 ## 12. 将来拡張
 
 - `index.html` で fetch する `/now.json` を Cache-Control で 60秒キャッシュ
