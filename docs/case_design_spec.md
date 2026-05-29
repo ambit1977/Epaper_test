@@ -76,17 +76,22 @@ USB-C (5V) ──→ TP4056 充電基板 ──┬── [Li-Po 3.7V (1000mAh)]
 
 ---
 
-## NFC 対応（スマートビジネスカード化）
+## NFC 連携（外付け NTAG ステッカー）
 
-詳細は [smart_business_card_design.md](smart_business_card_design.md) を参照。
+詳細は [smart_business_card_design.md](smart_business_card_design.md) と
+[business_card_site_design.md](business_card_site_design.md) を参照。
 
-ケース内に NFC アンテナを配置する場合の追加要件：
-- NTAG I²C plus 2k モジュール（25 × 25mm 程度、アンテナ込み）
-- フェライト NFC シート（40 × 40 × 0.3mm）
-- アンテナはケース**裏面下部**、E-Paper パネルの直下を避けて配置
-- E-Paper との間にフェライトシートを挟む（磁束遮蔽）
-- アンテナと E-Paper パネルの距離: **3mm 以上**確保
-- ケース厚みは +1mm 程度（19mm → 想定）
+電子ペーパー名刺デバイス自体には NFC IC を搭載しない。NFC は別途用意した
+NTAG213/215 ステッカー（25mm 円形、1枚 50-100円）に
+**固定 URL `https://ambit.go2020.tokyo/card/` を 1回だけ書き込む**運用。
+
+ケースの背面右下などに **凹みを設けて NTAG ステッカーを貼る** だけでよい：
+- 凹み: 30 × 30mm、深さ 1mm（ステッカー貼付用）
+- E-Paper パネルの金属層から離す（距離 3mm 以上）
+- フェライトシート（薄手 30 × 30 × 0.3mm）を挟むと読み取り距離が安定
+
+ハードウェア配線は不要なので、ケース内に追加配置するものはない。
+動的な状況発信はサーバの `now.json` 経由で行う。
 
 ## 4. 内部レイアウト（背面ふた側）
 

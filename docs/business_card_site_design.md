@@ -1,49 +1,56 @@
-# 名刺サイト設計（akiyama.<domain>）
+# 名刺サイト設計（既存 smart_business_card への統合）
 
-ESP32 名刺デバイスと連携する Web サービスの設計。
-本人が意図的に「今の状況」を発信し、ESP32 / `/now` ページ両方から参照される
-"信頼できる唯一の情報源" (Single Source of Truth) として機能する。
+電子ペーパー名刺デバイスは、別途稼働している NFC 名刺サイトと連携する。
+新規にサーバを立てるのではなく、**既存資産に最小限の追加** で済ませる。
+
+## 1. 既存資産
+
+| 項目 | 内容 |
+|------|------|
+| **公開 URL** | https://ambit.go2020.tokyo/card/ |
+| **リポジトリ** | https://github.com/ambit1977/smart_business_card |
+| **ローカルパス** | `/Users/ambit/Documents/個人開発/IoT/NFCタグ名刺` |
+| **スタック** | Next.js 14 (Pages Router) + Tailwind + 静的 export |
+| **ホスティング** | さくらVPS (AlmaLinux 9.4) + Apache `Alias /card → /var/www/ambit.go2020.tokyo-card` |
+| **デプロイ** | `./deploy.sh` (npm run build → rsync → chown) |
+| **プロフィール管理** | `lib/profile.js` 1 ファイル、`scripts/build-vcard.cjs` で `public/contact.vcf` 自動生成 |
+| **NFC タグ** | NTAG213/215 に **固定 URL** `https://ambit.go2020.tokyo/card/` を 1回書き込み |
+
+## 2. 追加するもの（最小構成）
+
+| 追加要素 | 役割 |
+|---------|------|
+| **`/card/now.json`** | 「今いる場所 / イベント / トピック」の動的データ（静的 export と並存） |
+| **`/card/api/set.php`** | now.json を更新する Bearer 認証 API（PHP 30行程度） |
+| **`/card/admin/`** | 秋山スマホ用の管理画面（PWA、Next.js の追加ページ）|
+| **`index.html` での fetch** | クライアント側で now.json を取得して動的表示（CSR） |
+
+すべて既存の `Alias /card` 配下に同居。SSL 証明書も Apache 設定も既存のまま。
 
 ---
 
-## 1. 役割
+## 3. URL 構造（統合後）
 
-1. **本人の現状を一元管理**（場所・イベント・トピック）
-2. **ESP32 名刺デバイスの参照先**（API として JSON を返す）
-3. **公開ステータスページ `/now`** として SNS にも貼れる
-4. **自己紹介 / 連絡先の単一情報源**（vCard の元データ）
-
----
-
-## 2. URL 構造
-
-| Path | 公開 | 内容 |
-|------|------|------|
-| `/` | 公開 | プロフィール、SNS、QR、自己紹介 |
-| `/now` | 公開 (public フラグによる) | 「今、何してる」状態ページ |
-| `/admin` | 認証 | スマホで状況更新する管理画面 |
-| `/api/now` | 公開（読み取り専用） | ESP32 と外部が取得する JSON |
-| `/api/set` | 認証（Bearer Token） | 状況更新の POST |
+```
+https://ambit.go2020.tokyo/card/
+  ├── index.html              ← 既存：vCard ダウンロード、SNS、Now 表示も追加
+  ├── contact.vcf             ← 既存：ビルド時自動生成
+  ├── avatar.svg              ← 既存
+  ├── now.json                ← 新規：動的、{ place, venue, event, topic, ... }
+  ├── admin/                  ← 新規：スマホ用 PWA、認証付き
+  │   └── index.html
+  └── api/
+      ├── set.php             ← 新規：Bearer 認証で now.json を書き換え
+      └── get.php (optional)  ← 新規：now.json をそのまま返すラッパー（CORS 用）
+```
 
 ---
 
-## 3. データモデル
+## 4. now.json データモデル
 
 ```json
 {
   "version": "v1",
-  "owner": {
-    "name": "Taishi Akiyama",
-    "company": "ezmag",
-    "title": "Engineer / Designer",
-    "email": "ambit.akiyama@gmail.com",
-    "phone": "+81-90-XXXX-XXXX",
-    "urls": [
-      "https://akiyama.example.com",
-      "https://linkedin.com/in/ambit",
-      "https://twitter.com/ambit"
-    ]
-  },
   "current": {
     "place": "渋谷",
     "venue": "WeWork 渋谷スクランブルスクエア",
@@ -57,83 +64,240 @@ ESP32 名刺デバイスと連携する Web サービスの設計。
 }
 ```
 
-### フィールドの意味
-
-| フィールド | 必須 | 用途 |
-|----------|-----|------|
-| `place` | ✓ | 大雑把な場所（渋谷、自宅、東京駅 など） |
-| `venue` | - | 具体的な会場名 |
-| `event` | - | イベント名 |
-| `topic` | - | 今日の話題、活動内容 |
-| `since` / `until` | - | 有効期間（未設定なら永続） |
-| `public` | ✓ | `/now` ページに公開するか |
-
-ESP32 はこの JSON を `/api/now` から取得し、NDEF NOTE を組み立てる。
+すべてのフィールド任意（空文字なら省略）。`public: false` の時は index.html や `/now` ページに出さない。
 
 ---
 
-## 4. 管理画面 `/admin`（スマホ最適化）
+## 5. `/api/set.php`（PHP 最小実装）
 
-### 画面構成
+```php
+<?php
+// /var/www/ambit.go2020.tokyo-card/api/set.php
+// Bearer Token で認証して now.json を上書き
+
+declare(strict_types=1);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: Authorization, Content-Type');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['error' => 'method not allowed']);
+    exit;
+}
+
+// Bearer token check
+$expected = trim(@file_get_contents('/etc/ambit-card/admin_token') ?: '');
+$auth = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+if (!$expected || $auth !== "Bearer {$expected}") {
+    http_response_code(401);
+    echo json_encode(['error' => 'unauthorized']);
+    exit;
+}
+
+$payload = json_decode(file_get_contents('php://input') ?: '', true);
+if (!is_array($payload) || !isset($payload['current'])) {
+    http_response_code(400);
+    echo json_encode(['error' => 'invalid payload']);
+    exit;
+}
+
+$now = [
+    'version'    => 'v1',
+    'current'    => $payload['current'],
+    'updated_at' => date('c'),
+];
+
+$target = '/var/www/ambit.go2020.tokyo-card/now.json';
+$tmp    = $target . '.tmp';
+file_put_contents($tmp, json_encode($now, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+rename($tmp, $target);
+
+echo json_encode(['ok' => true, 'updated_at' => $now['updated_at']]);
+```
+
+### サーバ側準備
+
+```sh
+# トークンを秘密ファイルに保存
+sudo mkdir -p /etc/ambit-card
+sudo sh -c 'openssl rand -hex 32 > /etc/ambit-card/admin_token'
+sudo chown apache:apache /etc/ambit-card/admin_token
+sudo chmod 640 /etc/ambit-card/admin_token
+
+# PHP モジュール導入（必要時）
+sudo dnf install -y php php-fpm
+sudo systemctl enable --now php-fpm
+sudo systemctl reload httpd
+
+# now.json 初期化
+echo '{"version":"v1","current":{"public":false},"updated_at":""}' \
+  | sudo tee /var/www/ambit.go2020.tokyo-card/now.json
+sudo chown alma:apache /var/www/ambit.go2020.tokyo-card/now.json
+sudo chmod 664 /var/www/ambit.go2020.tokyo-card/now.json
+```
+
+Apache の Alias 設定に追加：
+
+```apache
+# /card/api 以下では PHP を有効化
+<Directory /var/www/ambit.go2020.tokyo-card/api>
+    AllowOverride All
+    Require all granted
+    AddHandler php-script .php
+    DirectoryIndex index.php
+</Directory>
+```
+
+---
+
+## 6. `/admin/` の設計（Next.js 追加ページ）
+
+`pages/admin.jsx` を追加して、スマホ最適化の状況入力フォームを作る。
 
 ```
-┌─────────────────────────────────────┐
-│  ⚙️  Akiyama Status                  │
-├─────────────────────────────────────┤
-│  📍 場所         [ 渋谷            ] │
-│  🏢 会場         [ WeWork 渋谷     ] │
-│  🎫 イベント     [ IoT Conf 2026   ] │
-│  💬 トピック     [ Edge AI...      ] │
-│  ⏰ 期限         [ 今日中   ▼     ] │
-│  ☑ /now に公開する                  │
-│                                     │
-│  [   今の状況として設定する   ]      │
-│                                     │
-│  📝 プリセット                       │
-│  [自宅][オフィス][外出先][クリア]    │
-└─────────────────────────────────────┘
+pages/
+  ├── _app.jsx          (既存)
+  ├── _document.jsx     (既存)
+  ├── index.jsx         (既存 名刺ページ)
+  └── admin.jsx         ★追加 管理画面
+```
+
+### admin ページの仕様
+
+- 初回アクセス: URL クエリ `?token=xxx` を localStorage に保存し、URL を `replaceState` でクリーンに
+- 以降: localStorage のトークンを `Authorization: Bearer ...` に付けて POST
+- 入力項目: place / venue / event / topic / public（チェック）/ 期限プリセット
+- プリセットボタン: 「自宅」「オフィス」「外出先」「展示会」などをワンタップで反映
+- PWA 化: `next-pwa` または手書きの `manifest.json` + Service Worker
+
+### admin.jsx の骨格
+
+```jsx
+import { useEffect, useState } from 'react';
+
+const ENDPOINT = '/card/api/set.php';
+
+export default function Admin() {
+  const [token, setToken] = useState(null);
+  const [current, setCurrent] = useState({
+    place: '', venue: '', event: '', topic: '', public: true
+  });
+  const [busy, setBusy] = useState(false);
+
+  // 初回ロード: URL ?token=xxx を localStorage に保存
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const p = new URLSearchParams(window.location.search);
+    const t = p.get('token') || localStorage.getItem('ambit_card_admin_token');
+    if (t) {
+      localStorage.setItem('ambit_card_admin_token', t);
+      setToken(t);
+      if (p.has('token')) {
+        history.replaceState({}, '', window.location.pathname);
+      }
+    }
+  }, []);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ current })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      alert('更新しました');
+    } catch (e) {
+      alert('失敗: ' + e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // ... 入力 UI 略
+}
 ```
 
 ### プリセット
 
-```javascript
+```js
 const PRESETS = {
   '自宅':     { place: '自宅',          event: '', topic: '' },
-  'オフィス': { place: '渋谷オフィス',    event: '', topic: '' },
+  'オフィス': { place: '渋谷オフィス',  event: '', topic: '' },
   '外出先':   { place: '',              event: '', topic: '' },
-  '展示会':   { place: '東京ビッグサイト', event: 'CEATEC',    topic: '...' }
+  '展示会':   { place: '東京ビッグサイト', event: 'CEATEC', topic: '' },
 };
 ```
 
-### PWA 化
+---
 
-- `manifest.json` + Service Worker
-- スマホのホーム画面に追加可能
-- アイコンタップで即起動
-- オフライン時は最後の状態を表示
+## 7. `index.html` から now.json を反映する
 
-### 認証
+既存 `pages/index.jsx` に「ステータスバナー」を追加して、クライアント側で now.json を取りに行く。
+静的 export のままで OK（Next.js は CSR で fetch できる）。
 
-- Bearer Token を `Authorization` ヘッダに付ける
-- ブラウザの `localStorage` に保存
-- 初回だけ URL `?token=xxx` で渡し、保存後は URL を `replaceState` で消す
-- トークンは Cloudflare の環境変数 `ADMIN_TOKEN` と照合
+```jsx
+const [now, setNow] = useState(null);
+
+useEffect(() => {
+  fetch(asset('/now.json'))
+    .then((r) => r.ok ? r.json() : null)
+    .then((j) => {
+      if (j?.current?.public) setNow(j.current);
+    })
+    .catch(() => {});
+}, []);
+```
+
+レンダリング側：
+
+```jsx
+{now && (
+  <section className="px-6 mt-4">
+    <div className="rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm">
+      <div className="text-xs uppercase tracking-widest text-accent">Now</div>
+      <div className="mt-1 font-medium">
+        {now.place}
+        {now.venue && `（${now.venue}）`}
+      </div>
+      {now.event && <div className="text-xs text-gray-600">{now.event}</div>}
+      {now.topic && <div className="text-xs text-gray-600 mt-1">“{now.topic}”</div>}
+    </div>
+  </section>
+)}
+```
+
+これで NFC タップでカードページを開いた相手のスマホに「今ここ」が表示される。
+
+### vCard への反映（任意・将来）
+
+`scripts/build-vcard.cjs` を「クライアント側で動的生成」に切り替えるか、または
+サーバサイドで vCard を組み立てる `/card/api/vcard.php` を別途用意し、
+NOTE フィールドに `now.json` の内容を埋め込む選択肢もある。
+ただし MVP は静的 vCard + 動的 "Now" バナーで十分。
 
 ---
 
-## 5. ESP32 側の API 利用
+## 8. ESP32 側の API 利用
+
+### 取得（GET）
 
 ```cpp
-struct CurrentContext {
-  String place;
-  String event;
-  String topic;
-  String venue;
-};
-
 bool fetchCurrentContext(CurrentContext& ctx) {
   HTTPClient http;
-  http.begin("https://akiyama.example.com/api/now");
+  http.begin("https://ambit.go2020.tokyo/card/now.json");
   int code = http.GET();
   if (code != 200) { http.end(); return false; }
 
@@ -147,182 +311,120 @@ bool fetchCurrentContext(CurrentContext& ctx) {
   ctx.venue = doc["current"]["venue"].as<String>();
   return true;
 }
-
-String formatVcardNote(const CurrentContext& ctx, const String& timestamp, int exchangeCount) {
-  String note = timestamp;
-  if (!ctx.place.isEmpty())  note += " / " + ctx.place;
-  if (!ctx.event.isEmpty())  note += " / " + ctx.event;
-  if (!ctx.topic.isEmpty())  note += " - \"" + ctx.topic + "\"";
-  note += " #" + String(exchangeCount);
-  return note;
-}
 ```
 
-サンプル NOTE：
-```
-"2026-05-28 14:23 / 渋谷 / IoT Conference 2026 - "Edge AI × E-Paper" #3"
-```
+### 更新（POST、ボタン押下時のみ）
 
-### 取得失敗時のフォールバック
+ESP32 から直接 now.json を更新したい場合（書き換えトリガーボタンの押下時）：
 
 ```cpp
-if (!fetchCurrentContext(ctx)) {
-  // RTC RAM に保存していた前回値を使う
-  ctx = loadFromRtcRam();
+bool postContextUpdate(const String& place, const String& event, const String& topic) {
+  HTTPClient http;
+  http.begin("https://ambit.go2020.tokyo/card/api/set.php");
+  http.addHeader("Authorization", "Bearer " + String(ADMIN_TOKEN));
+  http.addHeader("Content-Type", "application/json");
+
+  JsonDocument doc;
+  doc["current"]["place"] = place;
+  doc["current"]["event"] = event;
+  doc["current"]["topic"] = topic;
+  doc["current"]["public"] = true;
+
+  String body;
+  serializeJson(doc, body);
+  int code = http.POST(body);
+  http.end();
+  return code == 200;
 }
 ```
 
----
-
-## 6. バックエンド（Cloudflare Workers + KV）
-
-### なぜ Cloudflare Workers + KV
-
-- 無料枠が広い（10万 req/日、KV 1000書/日・10万読/日）
-- 全世界に分散して低レイテンシ
-- 1ファイルで API + 静的ページの両方をホスト可
-- KV は eventually consistent だが本用途では十分
-
-### 骨格コード
-
-```javascript
-// worker.js
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
-};
-
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-
-    // OPTIONS (CORS preflight)
-    if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
-
-    // ESP32 / 公開クライアント向け
-    if (url.pathname === "/api/now") {
-      const data = await env.BCARD.get("current", "json");
-      return Response.json(data || {}, { headers: corsHeaders });
-    }
-
-    // 状況更新
-    if (url.pathname === "/api/set" && request.method === "POST") {
-      const auth = request.headers.get("Authorization");
-      if (auth !== `Bearer ${env.ADMIN_TOKEN}`) {
-        return new Response("Unauthorized", { status: 401, headers: corsHeaders });
-      }
-      const body = await request.json();
-      const prev = await env.BCARD.get("current", "json") || {};
-      const next = {
-        ...prev,
-        current: body.current,
-        updated_at: new Date().toISOString()
-      };
-      await env.BCARD.put("current", JSON.stringify(next));
-      return Response.json({ ok: true }, { headers: corsHeaders });
-    }
-
-    // 管理画面 (Basic Auth は省略、トークンクエリで初回認証)
-    if (url.pathname === "/admin") {
-      return new Response(adminHtml, {
-        headers: { "Content-Type": "text/html; charset=utf-8" }
-      });
-    }
-
-    // /now ステータスページ
-    if (url.pathname === "/now") {
-      const data = await env.BCARD.get("current", "json");
-      if (!data?.current?.public) {
-        return new Response("(現在は非公開)", {
-          headers: { "Content-Type": "text/html; charset=utf-8" }
-        });
-      }
-      return new Response(renderNowHtml(data), {
-        headers: { "Content-Type": "text/html; charset=utf-8" }
-      });
-    }
-
-    // トップページ
-    if (url.pathname === "/") {
-      const data = await env.BCARD.get("current", "json");
-      return new Response(renderTopHtml(data), {
-        headers: { "Content-Type": "text/html; charset=utf-8" }
-      });
-    }
-
-    return new Response("Not found", { status: 404 });
-  },
-};
-```
-
-### 環境変数
-
-| 名前 | 用途 |
-|------|------|
-| `ADMIN_TOKEN` | `/api/set` 用のシークレット |
-| `BCARD` | KV namespace のバインディング名 |
+- `ADMIN_TOKEN` は `config.h` に書き、リポジトリには含めない
+- 通常時は GET のみ、ボタン押下時のみ POST する運用
 
 ---
 
-## 7. デプロイ手順（概略）
+## 9. デプロイの流れ
+
+既存 deploy.sh を拡張：
 
 ```bash
-# 1. wrangler インストール
-npm install -g wrangler
+#!/bin/bash
+# deploy.sh - 静的 export + PHP API + now.json 初期化
+set -e
 
-# 2. プロジェクト作成
-wrangler init akiyama-bcard
-cd akiyama-bcard
+REMOTE_HOST="sakura-vps"
+REMOTE_DIR="/var/www/ambit.go2020.tokyo-card"
 
-# 3. KV namespace 作成
-wrangler kv:namespace create BCARD
+echo "▶ ローカルビルド"
+npm run build
 
-# 4. wrangler.toml に kv_namespaces 追記
-# [[kv_namespaces]]
-# binding = "BCARD"
-# id = "..."
+echo "▶ rsync で out/ を転送（既存）"
+rsync -avz --delete \
+  --exclude='.DS_Store' \
+  --exclude='now.json' \
+  out/ "${REMOTE_HOST}:${REMOTE_DIR}/"
 
-# 5. 環境変数設定
-wrangler secret put ADMIN_TOKEN
+echo "▶ api/ を別途配置（PHP は build 対象外なので独立同期）"
+rsync -avz --exclude='.DS_Store' api/ "${REMOTE_HOST}:${REMOTE_DIR}/api/"
 
-# 6. デプロイ
-wrangler deploy
-
-# 7. カスタムドメイン設定（任意）
-# Cloudflare ダッシュボードで akiyama.<domain> を Worker にバインド
+echo "▶ パーミッション"
+ssh "$REMOTE_HOST" \
+  "sudo chown -R alma:apache ${REMOTE_DIR} && \
+   sudo find ${REMOTE_DIR} -type d -exec chmod 755 {} \\; && \
+   sudo find ${REMOTE_DIR} -type f -exec chmod 644 {} \\; && \
+   sudo chmod 664 ${REMOTE_DIR}/now.json 2>/dev/null || true"
 ```
 
----
-
-## 8. ドメインとコスト
-
-| 項目 | 価格 |
-|------|------|
-| Cloudflare Workers Free Plan | 無料 |
-| Cloudflare KV Free Tier | 無料 |
-| カスタムドメイン（年） | 1,000円程度（`.dev` `.com` `.me` など） |
-| Cloudflare 経由のドメイン管理 | 原価 |
-
-サブドメイン（`*.workers.dev`）を使えばドメイン代もゼロ。
+now.json は **デプロイで消さない** ように rsync 対象から除外。
 
 ---
 
-## 9. 将来拡張案
+## 10. 認証戦略まとめ
 
-| 機能 | 説明 |
-|------|------|
-| **過去ログ** | KV に履歴を残し、`/log` で確認できるように |
-| **複数デバイス対応** | 名刺デバイスを追加配布した時、デバイス ID で識別 |
-| **タップカウント集計** | ESP32 の FD ピンで検知したタップ回数をクラウドに記録 |
-| **AI ジェネレーション** | トピックを AI が提案（その日のニュースから） |
-| **Google Calendar 連携** | 予定のタイトルを自動でトピックに反映 |
-| **LIFF (LINE)** | LINE で「今ここで会いました」を即送信 |
+| エンドポイント | 認証 | 用途 |
+|--------------|------|------|
+| `GET /card/`, `/card/now.json` | なし（公開） | 名刺ページ閲覧、ESP32 / 他クライアントが取得 |
+| `POST /card/api/set.php` | Bearer Token | 状態更新（秋山スマホ / ESP32 ボタン） |
+| `GET /card/admin/` | クライアント側で token 確認、サーバはガードしない | 管理 UI（HTML 自体は公開でも token がないと API 叩けない） |
+
+URL に `?token=xxx` を含めるのは初回のみ。以降 localStorage 保持。
 
 ---
 
-## 10. 関連ドキュメント
+## 11. 既存リポジトリへの追加コミット案
 
-- 全体構成と NDEF 仕様: [smart_business_card_design.md](smart_business_card_design.md)
-- ESP32 ハードウェア: [bare_module_design.md](bare_module_design.md)
+`smart_business_card` リポジトリへ：
+
+```
++ pages/admin.jsx              # 管理画面
++ pages/api-fallback.jsx       # (任意) JS 無効環境向け
++ api/set.php                  # PHP エンドポイント
++ api/.htaccess                # PHP ハンドラ宣言（必要時）
++ public/manifest.json         # PWA 化
++ public/sw.js                 # Service Worker (最小)
+~ pages/index.jsx              # now.json fetch + バナー追加
+~ deploy.sh                    # api/ も同期、now.json 保護
+~ DEPLOY.md                    # PHP / トークン設定の節を追加
+~ README.md                    # /admin と now.json の説明
+```
+
+このリポジトリ（電子ペーパー側）からは、`docs/` の参照リンクで補足する。
+
+---
+
+## 12. 将来拡張
+
+- `index.html` で fetch する `/now.json` を Cache-Control で 60秒キャッシュ
+- 過去履歴ログ（`/log.json`）の自動アーカイブ
+- LINE / Slack 通知連携（場所変更を SNS に投稿）
+- vCard の NOTE フィールドへの動的反映（`/api/vcard.php`）
+- ESP32 の `taps_today` を ESP32 から POST し、index に表示
+
+---
+
+## 13. 関連ドキュメント
+
+- 全体構成: [smart_business_card_design.md](smart_business_card_design.md)
+- ハードウェア: [bare_module_design.md](bare_module_design.md)
 - ケース: [case_design_spec.md](case_design_spec.md)
+- 既存サイト: https://github.com/ambit1977/smart_business_card

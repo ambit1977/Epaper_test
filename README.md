@@ -1,6 +1,19 @@
-# ESP32 × WeAct 2.9" E-Paper 天気予報ディスプレイ
+# ESP32 × WeAct E-Paper × NFC 名刺サイト連携
 
-ESP32 と WeAct Studio 2.9" BWR E-Paper モジュールを使った、Wi-Fi 経由で天気情報を表示する電子ペーパー端末。Open-Meteo API から現在気温・湿度・降水確率・3日間予報を取得して表示し、10 分ごとに Deep Sleep で自動更新する。
+ESP32 と WeAct Studio E-Paper モジュール（2.9" / 4.2" BWR 自動判別）を使った
+**電子ペーパー名刺デバイス**。気象情報の常時表示から始まり、最終的には
+別途運用している NFC 名刺サイト [smart_business_card](https://github.com/ambit1977/smart_business_card)
+（https://ambit.go2020.tokyo/card/）と連携して「今ここ / 今これしてます」を
+発信する個人名刺端末を目指す。
+
+## 関連リポジトリ
+
+- **本リポジトリ**: ハードウェア（ESP32 + E-Paper）の設計と Arduino スケッチ
+- **[smart_business_card](https://github.com/ambit1977/smart_business_card)**: 公開名刺サイト（Next.js + さくらVPS + Apache）
+
+NFC タグは smart_business_card の固定 URL を 1回書き込む既存運用を踏襲する。
+本デバイスは「現状の場所 / イベント / トピック」を `now.json` で
+サーバと共有し、E-Paper に表示する役割を担う。
 
 ![preview](docs/preview.png)
 

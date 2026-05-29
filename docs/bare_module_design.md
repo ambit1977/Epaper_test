@@ -149,35 +149,26 @@ ESP32 への電源は MCP1700 (リポ駆動) からのみ。FTDI の VCC は接�
 - GPIO0, GPIO2, GPIO12, GPIO15 は起動時の状態でブートモードが決まる
 - 現状の E-Paper 配線は GPIO0/2/12/15 を使っていないので問題なし
 
-### NFC（PN532 + NTAG215 パッシブタグ）の追加（スマートビジネスカード用途）
+### NFC は基板上に載せない（既存 NFC 名刺サイト統合のため）
 
-[smart_business_card_design.md](smart_business_card_design.md) 参照。
-ESP32 → PN532 → NTAG215 という 2 段構成で、電源 OFF 時もスマホで NTAG215 を読める。
+[smart_business_card_design.md](smart_business_card_design.md) を参照。
 
-PN532 は **P-MOSFET 経由で電源を ESP32 から制御** する：
+電子ペーパー名刺デバイスは **NFC 機能を持たない**。NFC タグは別途用意した
+NTAG213/215 ステッカーに iPhone NFC Tools で **固定 URL を 1回だけ書き込む**
+（[既存運用](https://github.com/ambit1977/smart_business_card/blob/main/NFC_WRITE_iPhone.md) 通り）。
+動的な状況発信はサーバの `now.json` 経由で行う。
 
-| 信号 | ESP32 GPIO | PN532 |
-|------|-----------|-------|
-| VCC | P-MOSFET 経由 3.3V | VCC |
-| GND | GND | GND |
-| SDA | GPIO21 | SDA |
-| SCL | GPIO22 | SCL |
-| IRQ | GPIO13 | IRQ（任意） |
-| RST | GPIO14 | RSTPDN（任意） |
-| PWR_CTRL | GPIO27 | P-MOSFET ゲートへ |
-| EXCHANGE_BTN | GPIO33 (RTC GPIO) | タクトスイッチ → GND（Deep Sleep からの ext0 wake 用） |
+これにより PN532 / フェライトシート / P-MOSFET 等は不要、配線も簡素化される。
 
-```
-       3.3V ──┐
-              │
-              S   AO3401 等
-GPIO27 ── G ──┤        (Low-side switch ではなく High-side で OFF 確実に)
-              │
-              D ── PN532 VCC
-```
+### オプション: 強制更新ボタン
 
-GPIO21/22 は ESP32 のハードウェア I2C デフォルトピン。E-Paper の SPI とは独立。
-NTAG215 は PN532 のアンテナで読み書きするので、ESP32 とは直接配線しない。
+ボタン押下で Deep Sleep から ext0 wake し、即時に天気と `now.json` を再取得する：
+
+| 信号 | ESP32 GPIO | 接続 |
+|------|-----------|------|
+| EXCHANGE_BTN | GPIO33 (RTC GPIO) | タクトスイッチ → GND |
+
+内蔵プルアップを使用、外付け抵抗不要。
 
 ---
 
