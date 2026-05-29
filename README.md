@@ -8,8 +8,10 @@ ESP32 と WeAct Studio E-Paper モジュール（2.9" / 4.2" BWR 自動判別）
 
 ## 関連リポジトリ
 
-- **本リポジトリ**: ハードウェア（ESP32 + E-Paper）の設計と Arduino スケッチ
-- **[smart_business_card](https://github.com/ambit1977/smart_business_card)**: 公開名刺サイト（Next.js + さくらVPS + Apache）
+- **本リポジトリ**: ハードウェア（ESP32 + E-Paper + PN532）の設計と Arduino スケッチ
+- **[smart_business_card](https://github.com/ambit1977/smart_business_card)**: 公開名刺サイト（Next.js + Apache + PHP）。
+  既に PHP API、PWA 管理画面、訪問者ログ、双方向 vCard 交換まで実装済み。
+  ESP32 はこのサイトの `/card/api/issue-token.php` と `/card/api/set.php` を叩いて連携する。
 
 NFC タグは smart_business_card の固定 URL を 1回書き込む既存運用を踏襲する。
 本デバイスは「現状の場所 / イベント / トピック」を `now.json` で
