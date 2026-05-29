@@ -164,10 +164,13 @@ ELECHOUSE PN532 NFC Module V3 を I2C で接続。SET0=H、SET1=L にディッ�
 | GND | GND | GND | |
 | SDA | GPIO21 | SDA | I2C デフォルト |
 | SCL | GPIO22 | SCL | I2C デフォルト |
-| IRQ | GPIO13 | INT0 | カード検出割込み |
-| RST | GPIO14 | RSTPDN | 電源 / リセット制御 |
+| RST | GPIO14 | RSTPDN | 電源 / リセット制御（書き込み時のみ ON） |
 
 GPIO21/22 は ESP32 のハードウェア I2C デフォルトピン。E-Paper の SPI とは独立。
+
+PN532 は **NTAG215 への書き込み専用**（リーダーモードは使わない）。
+これにより内蔵 NTAG215 とのアンテナ競合問題を回避する。
+詳細は [smart_business_card_design.md](smart_business_card_design.md) の「NFC 競合問題への対応」を参照。
 
 #### 省電力制御（RST ピン）
 

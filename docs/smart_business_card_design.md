@@ -17,26 +17,55 @@ E-Paper + PN532 + NTAG215 を ESP32 で統合した名刺デバイス。
 | モード | トリガー | 内容 |
 |--------|---------|------|
 | **A. 通常更新** | 10 分タイマー | now.json + 天気を取得して E-Paper 更新（PN532 は OFF） |
-| **B. 名刺交換** | ボタン押下 | PN532 起動 → 相手 NFC 読み取り → NTAG215 書き換え → "Ready to tap!" |
-| **C. パッシブ受信** | 電源 OFF 時 | NTAG215 だけが反応、最後に書き込まれた NDEF を返す |
+| **B. 名刺交換** | ボタン押下 | サーバから新トークン発行 → PN532 で内蔵 NTAG215 を書き換え → "Ready!" |
+| **C. パッシブ受信** | 電源 OFF 時 | NTAG215 だけが反応、最後に書き込まれた URL（トークン付）を返す |
+
+### NFC 競合問題への対応
+
+**PN532 のリーダー機能は使わない。** 代わりに、各交換ごとに**ユニークトークン**を生成し、
+NTAG215 に書き込む URL に埋め込む。相手がスマホでアクセスした瞬間にサーバ側で
+トークンと訪問者情報を紐づけ、論理的に「誰がいつ受け取ったか」を追跡する。
+
+これにより：
+- PN532 と NTAG215 のアンテナ競合が起きない（リーダーモードを使わないため）
+- 物理的な NFC スキャナーなしで人脈グラフが作れる
+- 受け取った人がサイトを開いた瞬間、その文脈（時刻・場所・イベント）を確認できる
 
 ```
 [ボタン押下]
    │
    ▼
-[E-Paper: "Preparing..." → WiFi 接続 → now.json + 天気取得]
+[E-Paper: "Preparing..." → WiFi 接続]
+   │
+   ▼
+[POST /api/issue-token] → トークン abc123xyz を取得
    │
    ▼
 [PN532 RST=HIGH → 起動]
-   ├──[Phase 1] Reader: 5秒間スキャン → 相手 NFC ID/vCard を読み取り
-   └──[Phase 2] Writer: 隣の NTAG215 に最新 NDEF 書き込み
+   └─ 内蔵 NTAG215 に NDEF URL 書き込み:
+      https://ambit.go2020.tokyo/card/?t=abc123xyz
+   │
+   ▼
+[PN532 RST=LOW → OFF]
    │
    ▼
 [E-Paper: "Ready to tap! #N" 表示]
-[PN532 RST=LOW → OFF]
 [30 秒待機（相手のスマホタッチ受付）]
 [Deep Sleep]
 ```
+
+### トークンが追跡するもの
+
+```
+[ESP32 発行]                [相手のタッチ]              [vCard 保存]
+issued                      opened                    downloaded
+{token,                     {opened_at,               (任意で記録)
+ issued_at,                  ip,
+ location,                   user_agent}
+ event, topic}
+```
+
+サーバ側が各状態を記録し、`/admin/log` で交換履歴を確認できる。
 
 ---
 

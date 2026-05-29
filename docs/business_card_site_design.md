@@ -412,6 +412,166 @@ URL に `?token=xxx` を含めるのは初回のみ。以降 localStorage 保持
 
 ---
 
+## 11b. トークン発行 / 追跡 API（名刺交換ログ）
+
+電子ペーパー名刺デバイスからの名刺交換時、ユニークトークンを発行して
+NTAG215 に書き込む URL に埋め込む。相手の訪問時にトークン経由で文脈を紐づける。
+
+### 追加エンドポイント
+
+| Path | 認証 | 役割 |
+|------|------|------|
+| `POST /card/api/issue-token.php` | Bearer Token | ESP32 がトークン発行を要求 |
+| `GET /card/?t={token}` | なし | 相手のスマホがアクセス、訪問記録 |
+| `GET /card/api/context.php?t={token}` | なし | 名刺ページ JS から、トークンに紐づく状況取得 |
+| `GET /card/admin/log` | Bearer Token | 交換履歴ダッシュボード（秋山用） |
+
+### `issue-token.php`
+
+```php
+<?php
+declare(strict_types=1);
+header('Content-Type: application/json; charset=utf-8');
+
+// Bearer 認証（set.php と同じ）
+$expected = trim(@file_get_contents('/etc/ambit-card/admin_token') ?: '');
+$auth = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+if (!$expected || $auth !== "Bearer {$expected}") {
+    http_response_code(401);
+    echo json_encode(['error' => 'unauthorized']);
+    exit;
+}
+
+$body = json_decode(file_get_contents('php://input') ?: '', true) ?: [];
+
+// 8 byte ランダムを hex 化（16文字）
+$token = bin2hex(random_bytes(8));
+
+$entry = [
+    'token'           => $token,
+    'issued_at'       => date('c'),
+    'issued_location' => $body['location'] ?? '',
+    'issued_event'    => $body['event'] ?? '',
+    'issued_topic'    => $body['topic'] ?? '',
+    'status'          => 'issued',
+];
+
+// JSON Lines に追記
+$logFile = '/var/www/ambit.go2020.tokyo-card/_data/tokens.jsonl';
+@mkdir(dirname($logFile), 0775, true);
+file_put_contents(
+    $logFile,
+    json_encode($entry, JSON_UNESCAPED_UNICODE) . "\n",
+    FILE_APPEND | LOCK_EX
+);
+
+echo json_encode([
+    'token' => $token,
+    'url'   => "https://ambit.go2020.tokyo/card/?t={$token}",
+]);
+```
+
+### トークン受信時の記録
+
+`/card/?t={token}` でアクセスされた時、JS から context.php を呼ぶ。
+サーバ側で tokens.jsonl に "opened" イベントを追記：
+
+```php
+// /card/api/context.php
+$token = $_GET['t'] ?? null;
+if (!$token || !preg_match('/^[0-9a-f]{16}$/', $token)) {
+    http_response_code(400);
+    echo json_encode(['error' => 'invalid token']);
+    exit;
+}
+
+// 該当トークンを探す
+$entry = lookupToken($token);
+if (!$entry) {
+    http_response_code(404);
+    echo json_encode(['error' => 'unknown token']);
+    exit;
+}
+
+// 初回アクセスなら "opened" を append
+appendEvent($token, [
+    'opened_at'  => date('c'),
+    'ip'         => $_SERVER['REMOTE_ADDR'] ?? '',
+    'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
+]);
+
+echo json_encode([
+    'token'           => $token,
+    'issued_at'       => $entry['issued_at'],
+    'issued_location' => $entry['issued_location'],
+    'issued_event'    => $entry['issued_event'],
+    'issued_topic'    => $entry['issued_topic'],
+]);
+```
+
+### `/card/index.html` での読み込み
+
+```js
+useEffect(() => {
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get('t');
+  if (!token) return;
+  fetch(`./api/context.php?t=${token}`)
+    .then((r) => r.ok ? r.json() : null)
+    .then((ctx) => {
+      if (ctx) setExchangeContext(ctx);
+    });
+}, []);
+```
+
+`exchangeContext` を画面に表示：
+```jsx
+{exchangeContext && (
+  <div className="text-xs text-gray-500">
+    {exchangeContext.issued_at} に
+    {exchangeContext.issued_location && ` 「${exchangeContext.issued_location}」 で`}
+    {exchangeContext.issued_event && `（${exchangeContext.issued_event}）`}
+    お渡ししました
+  </div>
+)}
+```
+
+### tokens.jsonl ストレージ
+
+```jsonl
+{"token":"abc123...","issued_at":"2026-05-30T14:23+09:00","issued_location":"渋谷","status":"issued"}
+{"token":"abc123...","opened_at":"2026-05-30T14:25+09:00","ip":"203.0.113.42","user_agent":"Mozilla/..."}
+{"token":"abc123...","downloaded_at":"2026-05-30T14:26+09:00"}
+```
+
+- 1行 = 1 イベント
+- 同じ token が複数行に登場（issued / opened / downloaded など）
+- 集計時は token でグルーピング
+
+月次でローテート：
+```bash
+# crontab で
+0 0 1 * * mv /var/www/.../tokens.jsonl /var/www/.../tokens-$(date +%Y-%m).jsonl
+```
+
+### `/card/admin/log`
+
+JSON Lines を読んで集計表示。秋山スマホで「今日 N 人と交換、内 M 人が開いた」を見られる。
+
+```
++──────────────────────────────────────────────+
+│ 名刺交換ログ                                   │
++──────────────────────────────────────────────+
+│ Today:     5 issued / 3 opened / 1 saved     │
+│ This week: 28 issued / 19 opened             │
+│                                              │
+│ Recent:                                      │
+│ 14:23  渋谷 / IoT Conf       opened 2:32後   │
+│ 11:45  自宅                  opened 5:10後   │
+│  9:15  渋谷オフィス          unopened ⏳     │
++──────────────────────────────────────────────+
+```
+
 ## 12. 将来拡張
 
 - `index.html` で fetch する `/now.json` を Cache-Control で 60秒キャッシュ
